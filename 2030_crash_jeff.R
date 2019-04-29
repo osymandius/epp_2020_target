@@ -1,9 +1,28 @@
+setwd("~/Documents/GitHub/epp_2020_target")
+
+devtools::install_github("mrc-ide/eppasm@new-master")
 library(eppasm)
 library(dplyr)
 library(magrittr)
 library(tidyverse)
 
 ############### FUNCTIONS TO RUN ##############
+
+fp_old_incid <- prepare_directincid(pjnz)
+
+fp_new_incid <- prepare_directincid(pjnz)
+
+x <- c(2010, 2020)
+y <- c(fp_old_incid[["incidinput"]][41], fp_old_incid[["incidinput"]][41]*0.25)
+
+test2 <- data.frame(approx(x, y, xout=2010:2020))
+
+fp_new_incid[["incidinput"]][41:51] <- test2$y
+fp_new_incid[["incidinput"]][52:length(fp_new_incid[["incidinput"]])] <- fp_new_incid[["incidinput"]][51]
+
+test_mod <- simmod(fp_new_incid)
+
+#####################
 
 anc_project <- function(obj, theta, ancsite=TRUE) {
   
@@ -15,16 +34,19 @@ anc_project <- function(obj, theta, ancsite=TRUE) {
   
   param_list <- list(fnCreateParam(theta, fp))
   fp_list <- lapply(param_list, function(par) update(fp, list=par))
-  mod_list <- lapply(fp_list, simmod)
+  # mod_list <- lapply(fp_list, simmod)
+  mod_list <- list(test_mod) #Is this a heinous crime? Who knows
   
-  b_site <- Map(sample_b_site, mod_list, fp_list, list(likdat$ancsite.dat), resid = FALSE)
+  ancsite.dat <- prepare_ancsite_likdat(attr(obj$Urban, "eppd")$ancsitedat, fp)
+  
+  b_site <- Map(sample_b_site, mod_list, fp_list, list(ancsite.dat), resid = FALSE)
   
   b_site_sigma <- sapply(b_site, anclik::sample.sigma2)
   
   ancsite_b <- data.frame(site = names(b_site[[1]]), mean = b_site[[1]])
   
-  newdata <- expand.grid(site = unique(likdat$ancsite.dat$df$site),
-                         year = 1985:2029,
+  newdata <- expand.grid(site = unique(ancsite.dat$df$site),
+                         year = 1985:2030,
                          type = "ancss",
                          age = 15,
                          agspan = 35,
@@ -43,7 +65,7 @@ anc_project <- function(obj, theta, ancsite=TRUE) {
   ancsite_pred <- data.frame(newdata, "prev" = ancsite_pred)
   #
   ancsite_pred <- merge(ancsite_pred,
-                        likdat$ancsite.dat$df[c("site", "year", "type", "age", "agspan", "n", "prev")],
+                        ancsite.dat$df[c("site", "year", "type", "age", "agspan", "n", "prev")],
                         by = c("site", "year", "type", "age", "agspan"),
                         suffixes = c("_sim", "_obs"), all.x=TRUE)
   #
@@ -56,7 +78,8 @@ anc_project <- function(obj, theta, ancsite=TRUE) {
 debugonce(anc_project)
 anc_project(obj, theta_u)
 
-merge_sim_anc <- function(obj, theta) {
+
+merge_sim_anc <- function(obj, theta, clean_anc) {
   
   get_max_year <- anc_project(obj, theta) %>%
     group_by(site) %>%
@@ -90,8 +113,6 @@ merge_sim_anc <- function(obj, theta) {
     mutate(used = TRUE) %>%
     select(c("site", "year", "used",  "prev", "n", "type", "agegr", "age","agspan"))
   
-  clean_anc <- attr(obj$Urban, "eppd")$ancsitedat
-  
   merge_anc <- clean_anc %>%
     rbind(filtered_max_year)
     
@@ -100,16 +121,14 @@ merge_sim_anc <- function(obj, theta) {
   
 }
 
-foo <- merge_sim_anc(obj, theta_u)
-
 ################ NEW FILES###############################
 
-{
+
 files <- c("~/Documents/Data/Spectrum files/2018 final/SSA/Botswana_ 2018 updated ART.PJNZ", "~/Documents/2018-12 2020 targets/Botswana_ 2030.PJNZ")
 
 pjnz <- files[2]
 
-obj <- prepare_spec_fit(pjnz, 2029.5)
+obj <- prepare_spec_fit(pjnz, 2030.5)
 
 ## Don't understand what Jeff has done here ##
 opt <- fitmod(obj$Urban, eppmod = "rhybrid", optfit = TRUE, B0=1e3, opthess = FALSE)
@@ -118,6 +137,8 @@ opt_full <- extend_projection(opt, opt$fp$ss$PROJ_YEARS)
 
 theta_u <- as.numeric(opt_full$resample[1,])
 fp <- opt_full$fp
+
+# get_incid <- prepare_directincid(pjnz)
 
 ## Set some flags that are set in fitmod(), (later improve this code...)
 fp <- prepare_anc_model(fp, attr(obj$Urban, "eppd"))
@@ -129,6 +150,10 @@ fp$incidmod <- "eppspectrum"
 
 param <- fnCreateParam(theta_u, fp)
 fp_par <- update(fp, list = param)
+
+clean_anc <- attr(obj$Urban, "eppd")$ancsitedat
+
+attr(obj$Urban, "eppd")$ancsitedat <- merge_sim_anc(obj, theta_u, clean_anc)
 
 mod <- simmod(fp_par)
 
@@ -177,9 +202,8 @@ debugonce(tidy_output)
 bwout <- Map(tidy_output, bwfit, "r-hybrid", attr(obj$Urban, "eppd")$country, names(bwfit))
 
 bwaggr <- aggr_specfit(bwfit)
-}
 
-anc_prev <- min_year(bw, theta_ur)
+
 
 #########################################
 
