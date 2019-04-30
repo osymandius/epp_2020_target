@@ -9,30 +9,26 @@ library(reshape2)
 
 ############### FUNCTIONS TO RUN ##############
 
+direct_incid_mod <- function(pjnz) {
+
 fp_old_incid <- prepare_directincid(pjnz)
 
 fp_new_incid <- prepare_directincid(pjnz)
 
 x <- c(2010, 2020)
-y <- c(fp_old_incid[["incidinput"]][41], fp_old_incid[["incidinput"]][41]*2)
+y <- c(fp_old_incid[["incidinput"]][41], fp_old_incid[["incidinput"]][41]*0.25)
 
 test2 <- data.frame(approx(x, y, xout=2010:2020))
 
 fp_new_incid[["incidinput"]][41:51] <- test2$y
 fp_new_incid[["incidinput"]][52:length(fp_new_incid[["incidinput"]])] <- fp_new_incid[["incidinput"]][51]
 
-test_mod <- simmod(fp_new_incid)
+mod <- simmod(fp_new_incid)
 
-prevs <- data.frame("test_mod" = prev(test_mod), "mod" = prev(mod), year = 1970:2030)
+return(mod)
+}
 
-prevs %>%
-  melt(id="year") %>%
-  ggplot(aes(x=year, y=value, group=variable)) +
-    geom_line(aes(color=variable))
-
-#####################
-
-anc_project <- function(obj, theta, mod, ancsite=TRUE) {
+anc_project <- function(obj, theta, mod, clean_anc, ancsite=TRUE) {
   
   # idvars <- data.frame(country = "country",
   #                      eppregion = "eppregion",
@@ -80,17 +76,7 @@ anc_project <- function(obj, theta, mod, ancsite=TRUE) {
   #
   # ancsite_pred <- data.frame(idvars, ancsite_pred)
   
-  return(ancsite_pred)
-  
-} 
-
-debugonce(anc_project)
-anc_project(obj, theta_u)
-
-
-merge_sim_anc <- function(obj, theta, mod, clean_anc) {
-  
-  get_max_year <- anc_project(obj, theta, mod) %>%
+  get_max_year <- ancsite_pred %>%
     group_by(site) %>%
     filter(!is.na(n_obs)) %>%
     summarise(max = max(year))
@@ -98,7 +84,7 @@ merge_sim_anc <- function(obj, theta, mod, clean_anc) {
   years <- as.numeric(get_max_year$max)
   sites <- as.character(get_max_year$site)
   
-  nest_sites <- anc_project(obj, theta, mod) %>%
+  nest_sites <- ancsite_pred %>%
     group_by(site) %>%
     nest()
   
@@ -130,8 +116,6 @@ merge_sim_anc <- function(obj, theta, mod, clean_anc) {
   
 }
 
-debugonce(merge_sim_anc)
-merge_sim_anc(obj, theta_u, clean_anc)
 
 ################ NEW FILES###############################
 
@@ -164,8 +148,16 @@ param <- fnCreateParam(theta_u, fp)
 fp_par <- update(fp, list = param)
 
 clean_anc <- attr(obj$Urban, "eppd")$ancsitedat
+clean_hhs <- attr(obj$Urban, "eppd")$hhs
+mod_2020_target <- direct_incid_mod(pjnz)
 
-attr(obj$Urban, "eppd")$ancsitedat <- merge_sim_anc(obj, theta_u, clean_anc)
+sim_hhs_prev <- rbinom(1, 3000, prev(mod_2020_target)[2020-1969])/3000
+
+attr(obj$Urban, "eppd")$hhs <- clean_hhs %>%
+  rbind(data.frame("year" = 2020, "sex" = "both", "agegr"="15-49", "n" = 3000,"prev" = sim_hhs_prev, "se"=sqrt((sim_hhs_prev*(1-sim_hhs_prev))/3000),"deff"= 2, "deff_approx"= 2, "used"=TRUE))
+
+attr(obj$Urban, "eppd")$ancsitedat <- anc_project(obj, theta_u, mod_2020_target, clean_anc) %>%
+  filter(year<=2020)
 
 mod <- simmod(fp_par)
 
@@ -210,7 +202,6 @@ bwfit <- lapply(bwfit, extend_projection, proj_years = 60)
 
 
 ## Simulating model outptus
-debugonce(tidy_output)
 bwout <- Map(tidy_output, bwfit, "r-hybrid", attr(obj$Urban, "eppd")$country, names(bwfit))
 
 bwaggr <- aggr_specfit(bwfit)
@@ -223,15 +214,41 @@ ggplot()+
   geom_line(data=min_year(bw) %>% filter(!is.na(prev)) %>% filter(year<2012), aes(x=year, y=prev, color=site)) +
   geom_line(data=min_year(bw) %>% filter(!is.na(prev)) %>% filter(year>2010), aes(x=year, y=prev, color=site), linetype = 2)
 
-ggplot(data=attr(obj$Urban, "eppd")$ancsitedat, aes(x=year, y=prev)) +
-      geom_point()+
-      geom_line(data=bwout$Urban$core %>% filter(indicator=="prev"), aes(x=year, y=mean))
+ggplot() +
+  geom_point(data=attr(obj$Urban, "eppd")$ancsitedat, aes(x=year, y=prev, color=site)) +
+  geom_line(data=attr(obj$Urban, "eppd")$ancsitedat, aes(x=year, y=prev, color=site, group=site)) +
+  # geom_line(data=bwout$Urban$core %>% filter(indicator=="prev" & year < 2030), aes(x=year, y=mean)) +
+  geom_line(data=prevs %>% melt(id="year") %>% filter(variable=="mod"), aes(x=year, y=value))+
+  geom_point(data=attr(obj$Urban, "eppd")$hhs, aes(x=year, y=prev))
 
-merge_sim_anc(obj, theta_u, clean_anc)
+ggplot() +
+  geom_line(data=prevs %>% melt(id="year"), aes(x=year, y=value, group=variable, color=variable))+
+  geom_line(data=bwout$Urban$core %>% filter(indicator=="prev" & year < 2030), aes(x=year, y=mean))
 
-merge_sim_anc(obj, theta_u, test_mod, clean_anc) %>%
+ggplot() +
+  geom_line(data=incids %>% melt(id="year"), aes(x=year, y=value, group=variable, color=variable))+
+  geom_line(data=bwout$Urban$core %>% filter(indicator=="incid" & year < 2030), aes(x=year, y=mean))
+
+
+anc_project(obj, theta_u, mod_2020_target, clean_anc) %>%
   ggplot(aes(x=year)) +
     geom_point(aes(y=prev, group=site)) +
     geom_line(aes(y=prev, group=site)) +
     geom_line(data=prevs %>% melt(id="year") %>% filter(variable=="test_mod"), aes(y=value))
+
+
+prevs <- data.frame("test_mod" = prev(direct_incid_mod(pjnz)), "mod" = prev(mod), year = 1970:2030)
+incids <- data.frame("test_mod" = incid(direct_incid_mod(pjnz)), "mod" = incid(mod), year = 1970:2030)
+
+prevs %>%
+  melt(id="year") %>%
+  ggplot(aes(x=year, y=value, group=variable)) +
+  geom_line(aes(color=variable))
+
+
+anc_project(obj, theta_u, mod_2020_target, clean_anc) %>%
+  arrange(site)
+
+debugonce(anc_project)
+anc_project(obj, theta_u, mod_2020_target, clean_anc)
 
