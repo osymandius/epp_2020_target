@@ -5,6 +5,7 @@ library(eppasm)
 library(dplyr)
 library(magrittr)
 library(tidyverse)
+library(reshape2)
 
 ############### FUNCTIONS TO RUN ##############
 
@@ -13,7 +14,7 @@ fp_old_incid <- prepare_directincid(pjnz)
 fp_new_incid <- prepare_directincid(pjnz)
 
 x <- c(2010, 2020)
-y <- c(fp_old_incid[["incidinput"]][41], fp_old_incid[["incidinput"]][41]*0.25)
+y <- c(fp_old_incid[["incidinput"]][41], fp_old_incid[["incidinput"]][41]*2)
 
 test2 <- data.frame(approx(x, y, xout=2010:2020))
 
@@ -22,9 +23,16 @@ fp_new_incid[["incidinput"]][52:length(fp_new_incid[["incidinput"]])] <- fp_new_
 
 test_mod <- simmod(fp_new_incid)
 
+prevs <- data.frame("test_mod" = prev(test_mod), "mod" = prev(mod), year = 1970:2030)
+
+prevs %>%
+  melt(id="year") %>%
+  ggplot(aes(x=year, y=value, group=variable)) +
+    geom_line(aes(color=variable))
+
 #####################
 
-anc_project <- function(obj, theta, ancsite=TRUE) {
+anc_project <- function(obj, theta, mod, ancsite=TRUE) {
   
   # idvars <- data.frame(country = "country",
   #                      eppregion = "eppregion",
@@ -35,7 +43,8 @@ anc_project <- function(obj, theta, ancsite=TRUE) {
   param_list <- list(fnCreateParam(theta, fp))
   fp_list <- lapply(param_list, function(par) update(fp, list=par))
   # mod_list <- lapply(fp_list, simmod)
-  mod_list <- list(test_mod) #Is this a heinous crime? Who knows
+  # mod_list <- list(test_mod) #Is this a heinous crime? Who knows
+  mod_list <- list(mod)
   
   ancsite.dat <- prepare_ancsite_likdat(attr(obj$Urban, "eppd")$ancsitedat, fp)
   
@@ -79,9 +88,9 @@ debugonce(anc_project)
 anc_project(obj, theta_u)
 
 
-merge_sim_anc <- function(obj, theta, clean_anc) {
+merge_sim_anc <- function(obj, theta, mod, clean_anc) {
   
-  get_max_year <- anc_project(obj, theta) %>%
+  get_max_year <- anc_project(obj, theta, mod) %>%
     group_by(site) %>%
     filter(!is.na(n_obs)) %>%
     summarise(max = max(year))
@@ -89,7 +98,7 @@ merge_sim_anc <- function(obj, theta, clean_anc) {
   years <- as.numeric(get_max_year$max)
   sites <- as.character(get_max_year$site)
   
-  nest_sites <- anc_project(obj, theta) %>%
+  nest_sites <- anc_project(obj, theta, mod) %>%
     group_by(site) %>%
     nest()
   
@@ -120,6 +129,9 @@ merge_sim_anc <- function(obj, theta, clean_anc) {
   return(merge_anc)
   
 }
+
+debugonce(merge_sim_anc)
+merge_sim_anc(obj, theta_u, clean_anc)
 
 ################ NEW FILES###############################
 
@@ -211,7 +223,15 @@ ggplot()+
   geom_line(data=min_year(bw) %>% filter(!is.na(prev)) %>% filter(year<2012), aes(x=year, y=prev, color=site)) +
   geom_line(data=min_year(bw) %>% filter(!is.na(prev)) %>% filter(year>2010), aes(x=year, y=prev, color=site), linetype = 2)
 
-ggplot(data=attr(bw$Urban, "eppd")$hhs, aes(x=year, y=prev)) +
+ggplot(data=attr(obj$Urban, "eppd")$ancsitedat, aes(x=year, y=prev)) +
       geom_point()+
       geom_line(data=bwout$Urban$core %>% filter(indicator=="prev"), aes(x=year, y=mean))
+
+merge_sim_anc(obj, theta_u, clean_anc)
+
+merge_sim_anc(obj, theta_u, test_mod, clean_anc) %>%
+  ggplot(aes(x=year)) +
+    geom_point(aes(y=prev, group=site)) +
+    geom_line(aes(y=prev, group=site)) +
+    geom_line(data=prevs %>% melt(id="year") %>% filter(variable=="test_mod"), aes(y=value))
 
